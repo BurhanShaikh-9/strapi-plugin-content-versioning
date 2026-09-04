@@ -6,7 +6,7 @@ module.exports = [
     path: "/:slug/revert-version",
     handler: "admin.revertVersion",
     config: {
-      policies: [],
+      policies: ["admin::isAuthenticatedAdmin"],
     },
   },
   {
@@ -14,7 +14,7 @@ module.exports = [
     path: "/:slug/:vuid/versions",
     handler: "admin.getVersions",
     config: {
-      policies: [],
+      policies: ["admin::isAuthenticatedAdmin"],
     },
   },
   {

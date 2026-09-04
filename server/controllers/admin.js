@@ -156,20 +156,77 @@ module.exports = {
       }
 
       const model = strapi.getModel(slug);
+      let sourceData = historicVersion.versionData;
+      if (typeof sourceData === "string") {
+        try {
+          sourceData = JSON.parse(sourceData);
+        } catch (e) {
+          sourceData = null;
+        }
+      }
+      if (!sourceData) {
+        sourceData = historicVersion;
+      }
+
+      const cleanComponentData = (item) => {
+        if (!item) return item;
+        if (Array.isArray(item)) return item.map(cleanComponentData);
+        if (typeof item === "object") {
+          const cleaned = {};
+          for (const k of Object.keys(item)) {
+            if (k === "id") continue;
+            cleaned[k] = cleanComponentData(item[k]);
+          }
+          return cleaned;
+        }
+        return item;
+      };
+
+      const extractEntityRef = (val) => {
+        if (!val) return null;
+        if (Array.isArray(val)) {
+          return val.map((v) => (v && (v.documentId || v.id)) || v).filter(Boolean);
+        }
+        if (typeof val === "object") {
+          return val.documentId || val.id || null;
+        }
+        return val;
+      };
+
+      const systemFields = [
+        "id",
+        "documentId",
+        "createdAt",
+        "updatedAt",
+        "publishedAt",
+        "vuid",
+        "versionNumber",
+        "versionComment",
+        "versionData",
+        "isVisibleInListView",
+        "createdBy",
+        "updatedBy",
+      ];
+
       const restoreData = {};
-      for (const key of Object.keys(model.attributes)) {
+      for (const key of Object.keys(model.attributes || {})) {
+        if (systemFields.includes(key)) continue;
+
         const attr = model.attributes[key];
-        if (
-          attr.type !== "relation" &&
-          !["id", "documentId", "createdAt", "updatedAt", "publishedAt", "vuid", "versionNumber", "isVisibleInListView"].includes(key)
-        ) {
-          let val = historicVersion[key];
-          if (attr.unique === true && typeof val === "string" && val.includes("_v")) {
-            val = val.split("_v")[0];
+        let val = sourceData[key];
+        if (val === undefined || val === null) continue;
+
+        if (attr.type === "component" || attr.type === "dynamiczone") {
+          restoreData[key] = cleanComponentData(val);
+        } else if (attr.type === "media") {
+          restoreData[key] = extractEntityRef(val);
+        } else if (attr.type === "relation") {
+          restoreData[key] = extractEntityRef(val);
+        } else {
+          if (attr.unique === true && typeof val === "string") {
+            val = val.replace(/__ver_\d+_\d+$|_v\d+_\d+$/, "");
           }
-          if (val !== undefined && val !== null) {
-            restoreData[key] = val;
-          }
+          restoreData[key] = val;
         }
       }
 

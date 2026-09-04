@@ -17,23 +17,23 @@ import {
 } from "@strapi/strapi/admin";
 import { format, parseISO } from "date-fns";
 
-const Versions = () => {
+const Versions = ({ isSidePanel = false }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { get, post } = useFetchClient();
   const context = useContentManagerContext();
 
-  let loggedInAuthor = "burhan shaikh";
+  let loggedInAuthor = "Admin";
   try {
     const currentUser = useAuth("Versions", (state) => state.user);
     if (currentUser) {
       loggedInAuthor =
         `${currentUser.firstname || ""} ${currentUser.lastname || ""}`.trim() ||
         currentUser.email ||
-        "burhan shaikh";
+        "Admin";
     }
   } catch (e) {
-    loggedInAuthor = "burhan shaikh";
+    loggedInAuthor = "Admin";
   }
 
   const [isOpen, setIsOpen] = useState(false);
@@ -130,15 +130,27 @@ const Versions = () => {
   };
 
   return (
-    <div style={{ display: "inline-block" }}>
-      <Button
-        variant="tertiary"
-        startIcon={<Clock />}
-        onClick={handleOpenRevisions}
-        style={{ height: "32px", fontSize: "13px" }}
-      >
-        Revisions
-      </Button>
+    <div style={{ display: isSidePanel ? "block" : "inline-block", width: isSidePanel ? "100%" : "auto" }}>
+      {isSidePanel ? (
+        <Button
+          variant="secondary"
+          startIcon={<Clock />}
+          onClick={handleOpenRevisions}
+          fullWidth
+          size="S"
+        >
+          View Revisions
+        </Button>
+      ) : (
+        <Button
+          variant="tertiary"
+          startIcon={<Clock />}
+          onClick={handleOpenRevisions}
+          style={{ height: "32px", fontSize: "13px" }}
+        >
+          Revisions
+        </Button>
+      )}
 
       {isOpen && (
         <Dialog.Root open={isOpen} onOpenChange={setIsOpen}>
@@ -287,4 +299,35 @@ const Versions = () => {
   );
 };
 
-export default Versions;
+const VersionsSidePanel = () => {
+  const context = useContentManagerContext();
+  const slug = context?.slug || context?.model;
+  const initialData = context?.initialData || context?.form?.initialData || {};
+  const currentVersionNum = Number(initialData?.versionNumber || 1);
+
+  if (!slug || context?.isCreatingEntry) {
+    return null;
+  }
+
+  return {
+    title: "Revisions",
+    content: (
+      <Box padding={2} style={{ width: "100%" }}>
+        <Flex direction="column" alignItems="stretch" gap={3}>
+          <Flex justifyContent="space-between" alignItems="center">
+            <Typography variant="pi" textColor="neutral600">
+              Current Version
+            </Typography>
+            <Badge active variant="success">
+              v{currentVersionNum}
+            </Badge>
+          </Flex>
+          <Versions isSidePanel />
+        </Flex>
+      </Box>
+    ),
+  };
+};
+
+export { Versions, VersionsSidePanel };
+export default VersionsSidePanel;

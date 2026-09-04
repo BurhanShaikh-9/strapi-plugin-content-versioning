@@ -66,13 +66,34 @@ module.exports = ({ strapi }) => {
 
           // Create historic snapshot row for previous version
           try {
+              // Fetch deep document payload (including media, components, relations)
+            let fullDocument = null;
+            const targetDocId = currentRecord.documentId || docId;
+            if (targetDocId) {
+              try {
+                fullDocument =
+                  (await strapi.documents(context.uid).findOne({
+                    documentId: targetDocId,
+                    status: "draft",
+                    populate: "*",
+                  })) ||
+                  (await strapi.documents(context.uid).findOne({
+                    documentId: targetDocId,
+                    status: "published",
+                    populate: "*",
+                  }));
+              } catch (docErr) {
+                // Ignore findOne error and fallback to currentRecord
+              }
+            }
+
             const snapshotData = {};
             const attributes = model.attributes || {};
             for (const key of Object.keys(attributes)) {
               const attr = attributes[key];
               if (attr.type !== "relation" && currentRecord[key] !== undefined && currentRecord[key] !== null) {
                 if (attr.unique === true && typeof currentRecord[key] === "string") {
-                  snapshotData[key] = `${currentRecord[key]}_v${currentMaxNum}_${Date.now()}`;
+                  snapshotData[key] = `${currentRecord[key]}__ver_${currentMaxNum}_${Date.now()}`;
                 } else {
                   snapshotData[key] = currentRecord[key];
                 }
@@ -81,6 +102,7 @@ module.exports = ({ strapi }) => {
             snapshotData.vuid = recordVuid;
             snapshotData.versionNumber = currentMaxNum;
             snapshotData.isVisibleInListView = false;
+            snapshotData.versionData = fullDocument || currentRecord;
             snapshotData.createdAt = new Date().toISOString();
             snapshotData.updatedAt = new Date().toISOString();
 

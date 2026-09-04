@@ -68,17 +68,23 @@ const ensureVersionedDBSchema = async (strapi) => {
         });
       }
 
-      // Update null values for existing records
-      await strapi.db.connection.raw(`
-        UPDATE ${collectionName} 
-        SET is_visible_in_list_view = TRUE 
-        WHERE is_visible_in_list_view IS NULL;
-      `);
-      await strapi.db.connection.raw(`
-        UPDATE ${collectionName} 
-        SET version_number = 1 
-        WHERE version_number IS NULL;
-      `);
+      const hasVersionData = await strapi.db.connection.schema.hasColumn(collectionName, "version_data");
+      if (!hasVersionData) {
+        await strapi.db.connection.schema.alterTable(collectionName, (table) => {
+          table.json("version_data").nullable();
+        });
+      }
+
+      // Update null values for existing records using cross-database Knex queries
+      await strapi.db
+        .connection(collectionName)
+        .whereNull("is_visible_in_list_view")
+        .update({ is_visible_in_list_view: true });
+
+      await strapi.db
+        .connection(collectionName)
+        .whereNull("version_number")
+        .update({ version_number: 1 });
 
       // 2. Ensure relation link tables exist (both _lnk and _links for compatibility)
       const linkTableNames = [

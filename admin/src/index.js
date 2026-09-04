@@ -3,7 +3,7 @@ import pluginPkg from "../../package.json";
 import pluginId from "./pluginId";
 import Initializer from "./components/Initializer";
 import middlewares from "./middlewares";
-import Versions from "./components/Versions";
+import Versions, { VersionsSidePanel } from "./components/Versions";
 import CheckboxConfirmation from "./components/CheckboxConfirmation";
 import mutateCTBContentTypeSchema from "./utils/mutateCTBContentTypeSchema";
 import { getTrad } from "./utils";
@@ -33,30 +33,35 @@ export default {
 
   bootstrap(app) {
     const cmPlugin = app.getPlugin("content-manager");
-    if (cmPlugin && cmPlugin.injectComponent) {
+    if (cmPlugin?.apis?.addEditViewSidePanel) {
+      cmPlugin.apis.addEditViewSidePanel([VersionsSidePanel || Versions]);
+    } else if (cmPlugin && cmPlugin.injectComponent) {
       cmPlugin.injectComponent("editView", "right-links", {
         name: "revisions-action",
         Component: Versions,
       });
     }
 
-   
-
     // Hook that adds a column into the CM's LV table
-    app.registerHook(
-      "Admin/CM/pages/ListView/inject-column-in-table",
-      addColumnToTableHook
-    );
+    if (typeof app.registerHook === "function") {
+      try {
+        app.registerHook(
+          "Admin/CM/pages/ListView/inject-column-in-table",
+          addColumnToTableHook
+        );
+      } catch (err) {}
+    }
 
     const ctbPlugin = app.getPlugin("content-type-builder");
 
-    if (ctbPlugin) {
-      const ctbFormsAPI = ctbPlugin.apis.forms;
-      ctbFormsAPI.addContentTypeSchemaMutation(mutateCTBContentTypeSchema);
-      ctbFormsAPI.components.add({
-        id: "checkboxConfirmation",
-        component: CheckboxConfirmation,
-      });
+    if (ctbPlugin && ctbPlugin.apis && ctbPlugin.apis.forms) {
+      try {
+        const ctbFormsAPI = ctbPlugin.apis.forms;
+        ctbFormsAPI.addContentTypeSchemaMutation(mutateCTBContentTypeSchema);
+        ctbFormsAPI.components.add({
+          id: "checkboxConfirmation",
+          component: CheckboxConfirmation,
+        });
 
       ctbFormsAPI.extendContentType({
         validator: () => ({
@@ -87,6 +92,7 @@ export default {
           },
         },
       });
+      } catch (err) {}
     }
   },
   async registerTrads({ locales }) {

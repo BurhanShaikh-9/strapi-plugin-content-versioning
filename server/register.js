@@ -72,6 +72,14 @@ const extendVersionedContentTypes = (strapi) => {
         type: "boolean",
         default: true,
       });
+
+      _.set(attributes, "versionData", {
+        writable: true,
+        private: true,
+        configurable: false,
+        visible: false,
+        type: "json",
+      });
     }
   });
 };
