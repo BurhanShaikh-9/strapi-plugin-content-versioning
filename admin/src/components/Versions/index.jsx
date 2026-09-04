@@ -120,8 +120,14 @@ const Versions = ({ isSidePanel = false }) => {
       setLoading(true);
       await post(`/content-versioning/${slug}/revert-version`, { versionId: targetId });
       setIsOpen(false);
-      // Reload active page so restored fields populate on screen
-      window.location.reload();
+      // Ensure page opens on the Draft tab so the user sees the restored fields
+      const currentUrl = new URL(window.location.href);
+      currentUrl.searchParams.set("status", "draft");
+      if (window.location.href === currentUrl.toString()) {
+        window.location.reload();
+      } else {
+        window.location.href = currentUrl.toString();
+      }
     } catch (err) {
       console.error("[Revert error]:", err);
     } finally {

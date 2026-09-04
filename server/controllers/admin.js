@@ -232,7 +232,10 @@ module.exports = {
 
       const updated = await strapi.documents(slug).update({
         documentId: activeEntry.documentId,
+        status: "draft",
         data: restoreData,
+        doNotCreateVersion: true,
+        ...(historicVersion.locale ? { locale: historicVersion.locale } : {}),
       });
 
       return ctx.send({ ok: true, data: updated });

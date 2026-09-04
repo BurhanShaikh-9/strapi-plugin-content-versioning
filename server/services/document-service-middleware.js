@@ -32,8 +32,33 @@ module.exports = ({ strapi }) => {
         return await next();
       }
 
-      // Intercept update and publish operations to snapshot previous version & increment version number
-      if (context.action === "update" || context.action === "publish") {
+      // For update operations: ensure vuid is assigned without creating new version snapshots
+      if (context.action === "update") {
+        const docId = context.params?.documentId || context.params?.id || context.params?.where?.documentId;
+        if (docId) {
+          const currentRecord =
+            (await strapi.db.query(context.uid).findOne({ where: { documentId: docId } })) ||
+            (await strapi.db.query(context.uid).findOne({ where: { id: docId } }));
+
+          if (currentRecord) {
+            let recordVuid = currentRecord.vuid || (context.params.data && context.params.data.vuid);
+            if (!recordVuid) {
+              recordVuid = uuid();
+              await strapi.db.query(context.uid).update({
+                where: { id: currentRecord.id },
+                data: { vuid: recordVuid, versionNumber: 1, isVisibleInListView: true },
+              });
+            }
+            if (context.params.data) {
+              context.params.data.vuid = recordVuid;
+            }
+          }
+        }
+        return await next();
+      }
+
+      // Intercept publish operation to snapshot previous version & increment version number
+      if (context.action === "publish" || context.params?.createVersion) {
         const docId = context.params?.documentId || context.params?.id || context.params?.where?.documentId;
         let currentRecord = null;
         if (docId) {
@@ -66,25 +91,15 @@ module.exports = ({ strapi }) => {
 
           // Create historic snapshot row for previous version
           try {
-              // Fetch deep document payload (including media, components, relations)
+            // Fetch deep document payload (including media, components, relations) via db.query to avoid connection pool deadlock
             let fullDocument = null;
-            const targetDocId = currentRecord.documentId || docId;
-            if (targetDocId) {
-              try {
-                fullDocument =
-                  (await strapi.documents(context.uid).findOne({
-                    documentId: targetDocId,
-                    status: "draft",
-                    populate: "*",
-                  })) ||
-                  (await strapi.documents(context.uid).findOne({
-                    documentId: targetDocId,
-                    status: "published",
-                    populate: "*",
-                  }));
-              } catch (docErr) {
-                // Ignore findOne error and fallback to currentRecord
-              }
+            try {
+              fullDocument = await strapi.db.query(context.uid).findOne({
+                where: { id: currentRecord.id },
+                populate: true,
+              });
+            } catch (docErr) {
+              fullDocument = currentRecord;
             }
 
             const snapshotData = {};
