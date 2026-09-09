@@ -81,25 +81,63 @@ module.exports = ({ strapi }) => {
             context.params.data.vuid = recordVuid;
           }
 
-          // Fetch existing versions for this vuid to determine current max version number
-          const existingVersions = await strapi.db.query(context.uid).findMany({
-            where: { vuid: recordVuid },
+          // Fetch existing historic snapshots for this vuid to determine monotonic snapshot version
+          const historicSnapshots = await strapi.db.query(context.uid).findMany({
+            where: { vuid: recordVuid, isVisibleInListView: false },
           });
 
-          const maxVersion = _.maxBy(existingVersions || [], (v) => Number(v.versionNumber || 1));
-          const currentMaxNum = maxVersion ? Number(maxVersion.versionNumber || 1) : Number(currentRecord.versionNumber || 1);
+          const highestSnapshotNum =
+            _.max((historicSnapshots || []).map((s) => Number(s.versionNumber || 0))) || 0;
+          const currentActiveNum = Number(currentRecord.versionNumber || 1);
+
+          const newSnapshotVer = Math.max(highestSnapshotNum + 1, currentActiveNum);
+          let nextVer = Math.min(newSnapshotVer + 1, 10);
 
           // Create historic snapshot row for previous version
           try {
-            // Fetch deep document payload (including media, components, relations) via db.query to avoid connection pool deadlock
+            // Fetch deep document payload (including media, components, dynamic zones, relations)
+            const buildDeepPopulate = (modelUid, depth = 0) => {
+              if (depth > 5) return true;
+              const m = strapi.getModel(modelUid);
+              if (!m) return true;
+              const pop = {};
+              for (const [k, a] of Object.entries(m.attributes || {})) {
+                if (a.type === "component") {
+                  pop[k] = { populate: buildDeepPopulate(a.component, depth + 1) };
+                } else if (a.type === "dynamiczone") {
+                  const on = {};
+                  for (const compUid of a.components || []) {
+                    on[compUid] = { populate: buildDeepPopulate(compUid, depth + 1) };
+                  }
+                  pop[k] = { on };
+                } else if (a.type === "media" || a.type === "relation") {
+                  pop[k] = true;
+                }
+              }
+              return pop;
+            };
+
             let fullDocument = null;
             try {
-              fullDocument = await strapi.db.query(context.uid).findOne({
-                where: { id: currentRecord.id },
-                populate: true,
+              const deepPop = buildDeepPopulate(context.uid);
+              fullDocument = await strapi.documents(context.uid).findOne({
+                documentId: currentRecord.documentId,
+                status: "published",
+                populate: deepPop,
+                ...(currentRecord.locale ? { locale: currentRecord.locale } : {}),
               });
             } catch (docErr) {
-              fullDocument = currentRecord;
+              try {
+                const deepPop = buildDeepPopulate(context.uid);
+                fullDocument = await strapi.documents(context.uid).findOne({
+                  documentId: currentRecord.documentId,
+                  status: "draft",
+                  populate: deepPop,
+                  ...(currentRecord.locale ? { locale: currentRecord.locale } : {}),
+                });
+              } catch (err2) {
+                fullDocument = currentRecord;
+              }
             }
 
             const snapshotData = {};
@@ -108,14 +146,14 @@ module.exports = ({ strapi }) => {
               const attr = attributes[key];
               if (attr.type !== "relation" && currentRecord[key] !== undefined && currentRecord[key] !== null) {
                 if (attr.unique === true && typeof currentRecord[key] === "string") {
-                  snapshotData[key] = `${currentRecord[key]}__ver_${currentMaxNum}_${Date.now()}`;
+                  snapshotData[key] = `${currentRecord[key]}__ver_${newSnapshotVer}_${Date.now()}`;
                 } else {
                   snapshotData[key] = currentRecord[key];
                 }
               }
             }
             snapshotData.vuid = recordVuid;
-            snapshotData.versionNumber = currentMaxNum;
+            snapshotData.versionNumber = newSnapshotVer;
             snapshotData.isVisibleInListView = false;
             snapshotData.versionData = fullDocument || currentRecord;
             snapshotData.createdAt = new Date().toISOString();
@@ -124,23 +162,83 @@ module.exports = ({ strapi }) => {
             await strapi.db.query(context.uid).create({
               data: snapshotData,
             });
+
+            // Enforce maximum revisions limit (10 total: max 9 historic snapshots + 1 current active)
+            const MAX_HISTORIC_SNAPSHOTS = 9;
+            const allSnapshots = await strapi.db.query(context.uid).findMany({
+              where: { vuid: recordVuid, isVisibleInListView: false },
+              sort: [{ createdAt: "asc" }, { id: "asc" }],
+            });
+
+            if (allSnapshots && allSnapshots.length > MAX_HISTORIC_SNAPSHOTS) {
+              const toPurge = allSnapshots.slice(0, allSnapshots.length - MAX_HISTORIC_SNAPSHOTS);
+              for (const snap of toPurge) {
+                await strapi.db.query(context.uid).delete({
+                  where: { id: snap.id },
+                });
+              }
+            }
+
+            // Renumber remaining historic snapshots sequentially 1..9 in database
+            const remainingSnapshots = await strapi.db.query(context.uid).findMany({
+              where: { vuid: recordVuid, isVisibleInListView: false },
+              sort: [{ createdAt: "asc" }, { id: "asc" }],
+            });
+
+            for (let i = 0; i < remainingSnapshots.length; i++) {
+              if (Number(remainingSnapshots[i].versionNumber) !== i + 1) {
+                await strapi.db.query(context.uid).update({
+                  where: { id: remainingSnapshots[i].id },
+                  data: { versionNumber: i + 1 },
+                });
+              }
+            }
+
+            nextVer = Math.min(remainingSnapshots.length + 1, 10);
           } catch (snapErr) {
             strapi.log.warn(`[versioning snapshot notice]: ${snapErr.message}`);
           }
 
-          const nextVer = currentMaxNum + 1;
-          if (context.params.data) {
+          if (context.params?.data) {
             context.params.data.versionNumber = nextVer;
             context.params.data.isVisibleInListView = true;
           }
 
-          // Update currentRecord's versionNumber and vuid directly in DB
-          await strapi.db.query(context.uid).update({
-            where: { id: currentRecord.id },
-            data: { versionNumber: nextVer, vuid: recordVuid, isVisibleInListView: true },
-          });
+          // Execute publish first so Strapi completes its publish lifecycle
+          const result = await next();
+
+          // After publish completes, synchronize nextVer to ALL active rows (both draft and published)
+          try {
+            await strapi.db.query(context.uid).updateMany({
+              where: {
+                vuid: recordVuid,
+                isVisibleInListView: true,
+              },
+              data: {
+                versionNumber: nextVer,
+                vuid: recordVuid,
+                isVisibleInListView: true,
+              },
+            });
+
+            if (docId) {
+              await strapi.db.query(context.uid).updateMany({
+                where: {
+                  documentId: docId,
+                },
+                data: {
+                  versionNumber: nextVer,
+                  vuid: recordVuid,
+                  isVisibleInListView: true,
+                },
+              });
+            }
+          } catch (syncErr) {
+            strapi.log.warn(`[content-versioning post-publish sync error]: ${syncErr.message}`);
+          }
+
+          return result;
         }
-        return await next();
       }
 
       return await next();

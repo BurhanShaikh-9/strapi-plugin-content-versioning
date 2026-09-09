@@ -76,16 +76,53 @@ module.exports = {
         return [];
       }
 
+      const formatVersionsList = (rawVersions) => {
+        if (!rawVersions || rawVersions.length === 0) return [];
+
+        const historic = rawVersions.filter((v) => !v.isVisibleInListView);
+        const active = rawVersions.filter((v) => v.isVisibleInListView);
+
+        // Most recent active record
+        const currentActive = active.length > 0 ? active[0] : null;
+
+        // Sort historic snapshots ascending chronologically
+        const sortedHistoric = [...historic].sort((a, b) => {
+          const timeA = new Date(a.createdAt || 0).getTime();
+          const timeB = new Date(b.createdAt || 0).getTime();
+          return timeA - timeB || Number(a.id || 0) - Number(b.id || 0);
+        });
+
+        // Enforce maximum 10 revisions in total (at most 9 historic snapshots + 1 active)
+        const MAX_HISTORIC_DISPLAY = 9;
+        const boundedHistoric = sortedHistoric.slice(-MAX_HISTORIC_DISPLAY);
+
+        const result = boundedHistoric.map((h, idx) => ({
+          ...h,
+          versionNumber: idx + 1,
+          isCurrent: false,
+        }));
+
+        if (currentActive) {
+          result.push({
+            ...currentActive,
+            createdAt: currentActive.updatedAt || currentActive.publishedAt || currentActive.createdAt,
+            versionNumber: result.length + 1,
+            isCurrent: true,
+          });
+        }
+
+        return result;
+      };
+
       // 1. Check if paramId matches a vuid directly
       let versions = await strapi.db.query(slug).findMany({
         where: { vuid: paramId },
         populate: ["createdBy", "updatedBy"],
-        sort: [{ versionNumber: "asc" }],
-        limit: 10,
+        sort: [{ id: "desc" }],
       });
 
       if (versions && versions.length > 0) {
-        return uniqBy(versions, "versionNumber");
+        return formatVersionsList(versions);
       }
 
       // 2. If no versions found by vuid, resolve entry by documentId or id
@@ -109,12 +146,11 @@ module.exports = {
         versions = await strapi.db.query(slug).findMany({
           where: { vuid: entryVuid },
           populate: ["createdBy", "updatedBy"],
-          sort: [{ versionNumber: "asc" }],
-          limit: 10,
+          sort: [{ id: "desc" }],
         });
 
         if (versions && versions.length > 0) {
-          return uniqBy(versions, "versionNumber");
+          return formatVersionsList(versions);
         }
 
         return [foundEntry];
@@ -128,31 +164,70 @@ module.exports = {
   },
   async revertVersion(ctx) {
     const { slug } = ctx.request.params;
-    const { versionId } = ctx.request.body || {};
+    const { versionId, currentDocumentId, versionNumber } = ctx.request.body || {};
 
     if (!slug || !versionId) {
       return ctx.badRequest("slug and versionId are required");
     }
 
     try {
-      const historicVersion =
-        (await strapi.db.query(slug).findOne({ where: { documentId: versionId } })) ||
-        (await strapi.db.query(slug).findOne({ where: { id: versionId } }));
+      let historicVersion = null;
+      // Safely query by documentId (only if versionId is a string and not purely digits to avoid pg type cast error)
+      if (typeof versionId === "string" && !/^\d+$/.test(versionId)) {
+        try {
+          historicVersion = await strapi.db.query(slug).findOne({ where: { documentId: versionId } });
+        } catch (e) {
+          // ignore lookup error and fallback to id
+        }
+      }
+      if (!historicVersion) {
+        historicVersion = await strapi.db.query(slug).findOne({
+          where: { id: Number(versionId) || versionId },
+        });
+      }
 
       if (!historicVersion) {
         return ctx.notFound("Historic version not found");
       }
 
-      const activeEntry =
-        (await strapi.db.query(slug).findOne({
-          where: { vuid: historicVersion.vuid, isVisibleInListView: true },
-        })) ||
-        (await strapi.db.query(slug).findOne({
-          where: { documentId: historicVersion.documentId },
-        }));
+      let targetDocumentId = currentDocumentId;
+      if (!targetDocumentId) {
+        // Resolve entry that actually has a non-null documentId
+        const activeEntryWithDocId =
+          (await strapi.db.query(slug).findOne({
+            where: {
+              vuid: historicVersion.vuid,
+              documentId: { $notNull: true },
+            },
+            orderBy: { id: "desc" },
+          })) ||
+          (await strapi.db.query(slug).findOne({
+            where: {
+              documentId: { $notNull: true },
+              isVisibleInListView: true,
+            },
+            orderBy: { id: "desc" },
+          }));
+        targetDocumentId = activeEntryWithDocId?.documentId || historicVersion.documentId;
+      }
 
-      if (!activeEntry) {
-        return ctx.notFound("Active entry not found");
+      if (!targetDocumentId) {
+        return ctx.notFound("Active document not found");
+      }
+
+      // Auto-repair: if any draft row with this vuid has documentId: null, backfill it
+      try {
+        await strapi.db.query(slug).updateMany({
+          where: {
+            vuid: historicVersion.vuid,
+            documentId: null,
+          },
+          data: {
+            documentId: targetDocumentId,
+          },
+        });
+      } catch (repairErr) {
+        strapi.log.warn(`[revertVersion auto-repair notice]: ${repairErr.message}`);
       }
 
       const model = strapi.getModel(slug);
@@ -164,23 +239,40 @@ module.exports = {
           sourceData = null;
         }
       }
-      if (!sourceData) {
-        sourceData = historicVersion;
-      }
 
-      const cleanComponentData = (item) => {
-        if (!item) return item;
-        if (Array.isArray(item)) return item.map(cleanComponentData);
-        if (typeof item === "object") {
-          const cleaned = {};
-          for (const k of Object.keys(item)) {
-            if (k === "id") continue;
-            cleaned[k] = cleanComponentData(item[k]);
+      if (!sourceData) {
+        const buildDeepPopulate = (modelUid, depth = 0) => {
+          if (depth > 5) return true;
+          const m = strapi.getModel(modelUid);
+          if (!m) return true;
+          const pop = {};
+          for (const [k, a] of Object.entries(m.attributes || {})) {
+            if (a.type === "component") {
+              const nested = buildDeepPopulate(a.component, depth + 1);
+              pop[k] = { populate: Object.keys(nested || {}).length > 0 ? nested : "*" };
+            } else if (a.type === "dynamiczone") {
+              const on = {};
+              for (const compUid of a.components || []) {
+                const nested = buildDeepPopulate(compUid, depth + 1);
+                on[compUid] = { populate: Object.keys(nested || {}).length > 0 ? nested : "*" };
+              }
+              pop[k] = { on };
+            } else if (a.type === "media" || a.type === "relation") {
+              pop[k] = true;
+            }
           }
-          return cleaned;
+          return pop;
+        };
+
+        try {
+          sourceData = await strapi.documents(slug).findOne({
+            documentId: historicVersion.documentId,
+            populate: buildDeepPopulate(slug),
+          });
+        } catch (e) {
+          sourceData = historicVersion;
         }
-        return item;
-      };
+      }
 
       const extractEntityRef = (val) => {
         if (!val) return null;
@@ -191,6 +283,24 @@ module.exports = {
           return val.documentId || val.id || null;
         }
         return val;
+      };
+
+      const cleanComponentData = (item) => {
+        if (!item) return item;
+        if (Array.isArray(item)) return item.map(cleanComponentData);
+        if (typeof item === "object") {
+          // If this object represents a media file or relation reference, preserve identifier
+          if (item.mime !== undefined || item.provider !== undefined || item.hash !== undefined) {
+            return item.id || item.documentId || item;
+          }
+          const cleaned = {};
+          for (const k of Object.keys(item)) {
+            if (k === "id" || k === "createdAt" || k === "updatedAt") continue;
+            cleaned[k] = cleanComponentData(item[k]);
+          }
+          return cleaned;
+        }
+        return item;
       };
 
       const systemFields = [
@@ -206,6 +316,8 @@ module.exports = {
         "isVisibleInListView",
         "createdBy",
         "updatedBy",
+        "locale",
+        "localizations",
       ];
 
       const restoreData = {};
@@ -218,9 +330,7 @@ module.exports = {
 
         if (attr.type === "component" || attr.type === "dynamiczone") {
           restoreData[key] = cleanComponentData(val);
-        } else if (attr.type === "media") {
-          restoreData[key] = extractEntityRef(val);
-        } else if (attr.type === "relation") {
+        } else if (attr.type === "media" || attr.type === "relation") {
           restoreData[key] = extractEntityRef(val);
         } else {
           if (attr.unique === true && typeof val === "string") {
@@ -230,15 +340,61 @@ module.exports = {
         }
       }
 
-      const updated = await strapi.documents(slug).update({
-        documentId: activeEntry.documentId,
-        status: "draft",
-        data: restoreData,
-        doNotCreateVersion: true,
-        ...(historicVersion.locale ? { locale: historicVersion.locale } : {}),
-      });
+      const revertedVersionNum = Number(historicVersion.versionNumber || versionNumber || 1);
+      restoreData.versionNumber = revertedVersionNum;
+      restoreData.vuid = historicVersion.vuid;
+      restoreData.isVisibleInListView = true;
 
-      return ctx.send({ ok: true, data: updated });
+      let updated = null;
+      try {
+        updated = await strapi.documents(slug).update({
+          documentId: targetDocumentId,
+          status: "draft",
+          data: restoreData,
+          doNotCreateVersion: true,
+          ...(historicVersion.locale ? { locale: historicVersion.locale } : {}),
+        });
+      } catch (docErr) {
+        strapi.log.warn(`[revertVersion Document Service notice, falling back to direct DB update]: ${docErr.message}`);
+        // Direct DB update fallback for draft row
+        const draftRow = await strapi.db.query(slug).findOne({
+          where: {
+            vuid: historicVersion.vuid,
+            publishedAt: null,
+          },
+        });
+        if (draftRow) {
+          await strapi.db.query(slug).update({
+            where: { id: draftRow.id },
+            data: {
+              ...restoreData,
+              documentId: targetDocumentId,
+              versionNumber: revertedVersionNum,
+              vuid: historicVersion.vuid,
+              isVisibleInListView: true,
+            },
+          });
+          updated = draftRow;
+        } else {
+          throw docErr;
+        }
+      }
+
+      // Synchronize draft metadata in DB
+      try {
+        await strapi.db.query(slug).updateMany({
+          where: { documentId: targetDocumentId },
+          data: {
+            versionNumber: revertedVersionNum,
+            vuid: historicVersion.vuid,
+            isVisibleInListView: true,
+          },
+        });
+      } catch (dbErr) {
+        // ignore
+      }
+
+      return ctx.send({ ok: true, data: updated, versionNumber: revertedVersionNum });
     } catch (err) {
       strapi.log.error("[revertVersion controller error]:", err);
       return ctx.badRequest(err.message);

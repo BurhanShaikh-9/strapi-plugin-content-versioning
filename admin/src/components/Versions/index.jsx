@@ -40,31 +40,42 @@ const Versions = ({ isSidePanel = false }) => {
   const [versioningEnabled, setVersioningEnabled] = useState(true);
   const [revisionsList, setRevisionsList] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [revertingId, setRevertingId] = useState(null);
+  const [revertError, setRevertError] = useState(null);
 
   const initialData = context?.initialData || context?.form?.initialData || {};
   const modifiedData = context?.modifiedData || context?.form?.modifiedData || {};
-  const slug = context?.slug || context?.model;
-  const documentId = context?.documentId || context?.id || initialData?.documentId;
 
-  const currentVersionNum = Number(initialData?.versionNumber || 1);
+  // Robust slug & documentId extraction with URL fallback
+  const pathname = window?.location?.pathname || location?.pathname || "";
+  let extractedSlug = context?.slug || context?.model;
+  let extractedDocId = context?.documentId || context?.id || initialData?.documentId;
+
+  if (!extractedSlug || !extractedDocId) {
+    const matchCol = pathname.match(/\/content-manager\/collection-types\/([^/]+)(?:\/([^/?#]+))?/);
+    if (matchCol) {
+      if (!extractedSlug) extractedSlug = matchCol[1];
+      if (!extractedDocId) extractedDocId = matchCol[2];
+    } else {
+      const matchSingle = pathname.match(/\/content-manager\/single-types\/([^/?#]+)/);
+      if (matchSingle && !extractedSlug) {
+        extractedSlug = matchSingle[1];
+      }
+    }
+  }
+
+  const slug = extractedSlug;
+  const documentId = extractedDocId;
+
   const currentVuid = initialData?.vuid || modifiedData?.vuid;
   const lookupId = currentVuid || documentId || initialData?.id;
 
-  const handleOpenRevisions = async () => {
-    setIsOpen(true);
-    if (!lookupId || !slug) {
-      setRevisionsList([
-        {
-          id: initialData?.id || 1,
-          documentId: documentId,
-          versionNumber: currentVersionNum,
-          createdAt: initialData?.createdAt || new Date().toISOString(),
-          author: loggedInAuthor,
-        },
-      ]);
-      return;
-    }
+  const [activeVersionNum, setActiveVersionNum] = useState(
+    initialData?.versionNumber ? Number(initialData.versionNumber) : null
+  );
 
+  const fetchVersions = useCallback(async () => {
+    if (!lookupId || !slug) return;
     try {
       setLoading(true);
       const res = await get(`/content-versioning/${slug}/${lookupId}/versions`);
@@ -81,62 +92,84 @@ const Versions = ({ isSidePanel = false }) => {
             versionNumber: Number(v.versionNumber || 1),
             createdAt: v.createdAt,
             author: authorName || loggedInAuthor,
+            isCurrent: Boolean(v.isCurrent),
           };
         });
-        // Sort in ASCENDING order (1, 2, 3, 4...)
-        setRevisionsList(formatted.sort((a, b) => a.versionNumber - b.versionNumber));
-      } else {
-        setRevisionsList([
-          {
-            id: initialData?.id || 1,
-            documentId: documentId,
-            versionNumber: currentVersionNum,
-            createdAt: initialData?.createdAt || new Date().toISOString(),
-            author: loggedInAuthor,
-          },
-        ]);
+        const sorted = formatted.sort((a, b) => a.versionNumber - b.versionNumber);
+        setRevisionsList(sorted);
+
+        const currentActiveRev = sorted.find((r) => r.isCurrent) || sorted[sorted.length - 1];
+        if (currentActiveRev) {
+          setActiveVersionNum(currentActiveRev.versionNumber);
+        }
       }
     } catch (err) {
-      console.error(err);
-      setRevisionsList([
-        {
-          id: initialData?.id || 1,
-          documentId: documentId,
-          versionNumber: currentVersionNum,
-          createdAt: initialData?.createdAt || new Date().toISOString(),
-          author: loggedInAuthor,
-        },
-      ]);
+      console.error("[fetchVersions error]:", err);
     } finally {
       setLoading(false);
     }
+  }, [get, slug, lookupId, loggedInAuthor]);
+
+  React.useEffect(() => {
+    fetchVersions();
+  }, [fetchVersions]);
+
+  const handleOpenRevisions = async () => {
+    setIsOpen(true);
+    setRevertError(null);
+    await fetchVersions();
   };
 
   const handleRevertToRevision = async (rev) => {
     const targetId = rev.documentId || rev.id;
-    if (!targetId || !slug) return;
+    if (!targetId || !slug) {
+      alert("Unable to revert: missing content-type or revision identifier.");
+      return;
+    }
 
     try {
-      setLoading(true);
-      await post(`/content-versioning/${slug}/revert-version`, { versionId: targetId });
-      setIsOpen(false);
-      // Ensure page opens on the Draft tab so the user sees the restored fields
-      const currentUrl = new URL(window.location.href);
-      currentUrl.searchParams.set("status", "draft");
-      if (window.location.href === currentUrl.toString()) {
+      setRevertingId(targetId);
+      setRevertError(null);
+      const res = await post(`/content-versioning/${slug}/revert-version`, {
+        versionId: targetId,
+        currentDocumentId: documentId,
+        versionNumber: rev.versionNumber,
+      });
+
+      if (res?.data?.ok || res?.status === 200) {
+        setIsOpen(false);
+        // Reload current document page so Content Manager re-fetches and renders the restored draft data
         window.location.reload();
       } else {
-        window.location.href = currentUrl.toString();
+        throw new Error(res?.data?.message || "Revert did not complete successfully");
       }
     } catch (err) {
+      const errMsg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        "An error occurred while reverting";
       console.error("[Revert error]:", err);
+      setRevertError(errMsg);
+      alert(`Revert failed: ${errMsg}`);
     } finally {
-      setLoading(false);
+      setRevertingId(null);
     }
   };
 
   return (
     <div style={{ display: isSidePanel ? "block" : "inline-block", width: isSidePanel ? "100%" : "auto" }}>
+      {isSidePanel && (
+        <Flex justifyContent="space-between" alignItems="center" marginBottom={3}>
+          <Typography variant="pi" textColor="neutral600">
+            Current Version
+          </Typography>
+          <Badge active variant="success">
+            v{activeVersionNum || initialData?.versionNumber || 1}
+          </Badge>
+        </Flex>
+      )}
+
       {isSidePanel ? (
         <Button
           variant="secondary"
@@ -164,6 +197,19 @@ const Versions = ({ isSidePanel = false }) => {
             <Dialog.Header>Revisions History</Dialog.Header>
             <Dialog.Body>
               <Flex direction="column" alignItems="stretch" gap={4} style={{ width: "100%" }}>
+                {revertError && (
+                  <Box
+                    padding={3}
+                    background="danger100"
+                    borderColor="danger200"
+                    hasRadius
+                    style={{ border: "1px solid #f87272", borderRadius: "4px", backgroundColor: "#fee2e2" }}
+                  >
+                    <Typography textColor="danger700" fontWeight="bold" variant="pi">
+                      {revertError}
+                    </Typography>
+                  </Box>
+                )}
                 {/* Toggle Switch */}
                 <Box style={{ width: "100%" }}>
                   <Flex justifyContent="space-between" alignItems="center" marginBottom={1}>
@@ -228,15 +274,18 @@ const Versions = ({ isSidePanel = false }) => {
                           </tr>
                         </thead>
                         <tbody>
-                          {revisionsList.map((rev) => {
-                            const isCurrent = rev.versionNumber === currentVersionNum;
+                          {revisionsList.map((rev, index) => {
+                            const isCurrent =
+                              rev.isCurrent !== undefined
+                                ? rev.isCurrent
+                                : index === revisionsList.length - 1;
                             const formattedDate = rev.createdAt
                               ? format(parseISO(rev.createdAt), "M/d/yyyy h:mm:ss a")
                               : "";
 
                             return (
                               <tr
-                                key={rev.versionNumber}
+                                key={rev.id || rev.versionNumber}
                                 style={{
                                   borderBottom: "1px solid #f6f6f9",
                                   height: "44px",
@@ -269,6 +318,8 @@ const Versions = ({ isSidePanel = false }) => {
                                     <Button
                                       variant="secondary"
                                       size="S"
+                                      loading={revertingId === (rev.documentId || rev.id)}
+                                      disabled={Boolean(revertingId)}
                                       onClick={() => handleRevertToRevision(rev)}
                                       style={{
                                         backgroundColor: "#ffffff",
@@ -279,7 +330,7 @@ const Versions = ({ isSidePanel = false }) => {
                                         fontWeight: "600",
                                       }}
                                     >
-                                      Revert
+                                      {revertingId === (rev.documentId || rev.id) ? "Reverting..." : "Revert"}
                                     </Button>
                                   )}
                                 </td>
@@ -308,8 +359,6 @@ const Versions = ({ isSidePanel = false }) => {
 const VersionsSidePanel = () => {
   const context = useContentManagerContext();
   const slug = context?.slug || context?.model;
-  const initialData = context?.initialData || context?.form?.initialData || {};
-  const currentVersionNum = Number(initialData?.versionNumber || 1);
 
   if (!slug || context?.isCreatingEntry) {
     return null;
@@ -319,17 +368,7 @@ const VersionsSidePanel = () => {
     title: "Revisions",
     content: (
       <Box padding={2} style={{ width: "100%" }}>
-        <Flex direction="column" alignItems="stretch" gap={3}>
-          <Flex justifyContent="space-between" alignItems="center">
-            <Typography variant="pi" textColor="neutral600">
-              Current Version
-            </Typography>
-            <Badge active variant="success">
-              v{currentVersionNum}
-            </Badge>
-          </Flex>
-          <Versions isSidePanel />
-        </Flex>
+        <Versions isSidePanel />
       </Box>
     ),
   };
