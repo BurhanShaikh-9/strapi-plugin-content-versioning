@@ -1,6 +1,6 @@
-# @burhanshaikh-9/strapi-plugin-content-versioning
+# @burhanshaikh/strapi-plugin-content-versioning
 
-[![npm version](https://img.shields.io/npm/v/@burhanshaikh-9/strapi-plugin-content-versioning.svg)](https://www.npmjs.com/package/@burhanshaikh-9/strapi-plugin-content-versioning)
+[![npm version](https://img.shields.io/npm/v/@burhanshaikh/strapi-plugin-content-versioning.svg)](https://www.npmjs.com/package/@burhanshaikh/strapi-plugin-content-versioning)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Strapi 5](https://img.shields.io/badge/Strapi-v5-purple.svg)](https://strapi.io)
 
@@ -32,10 +32,10 @@ Install the package in your Strapi project:
 
 ```bash
 # Using npm
-npm install @burhanshaikh-9/strapi-plugin-content-versioning
+npm install @burhanshaikh/strapi-plugin-content-versioning
 
 # Using yarn
-yarn add @burhanshaikh-9/strapi-plugin-content-versioning
+yarn add @burhanshaikh/strapi-plugin-content-versioning
 ```
 
 ---
