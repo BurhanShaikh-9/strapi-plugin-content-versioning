@@ -62,10 +62,34 @@ const getLatestValueByDB = (latest) => {
   }
 };
 
+const buildDeepPopulate = (strapiInstance, modelUid, depth = 0) => {
+  if (depth > 5) return true;
+  const m = strapiInstance.getModel(modelUid);
+  if (!m) return true;
+  const pop = {};
+  for (const [k, a] of Object.entries(m.attributes || {})) {
+    if (a.type === "component") {
+      const nested = buildDeepPopulate(strapiInstance, a.component, depth + 1);
+      pop[k] = { populate: typeof nested === "object" && Object.keys(nested || {}).length > 0 ? nested : "*" };
+    } else if (a.type === "dynamiczone") {
+      const on = {};
+      for (const compUid of a.components || []) {
+        const nested = buildDeepPopulate(strapiInstance, compUid, depth + 1);
+        on[compUid] = { populate: typeof nested === "object" && Object.keys(nested || {}).length > 0 ? nested : "*" };
+      }
+      pop[k] = { on };
+    } else if (a.type === "media" || a.type === "relation") {
+      pop[k] = true;
+    }
+  }
+  return pop;
+};
+
 module.exports = {
   getLatestValueByDB,
   getService,
   getCoreStore,
   getLatestRawQuery,
   isLocalizedContentType,
+  buildDeepPopulate,
 };

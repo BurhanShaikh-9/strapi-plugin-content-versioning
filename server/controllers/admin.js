@@ -1,7 +1,7 @@
 "use strict";
 
 const { v4: uuid } = require("uuid");
-const { getService } = require("../utils");
+const { getService, buildDeepPopulate } = require("../utils");
 const { pick, uniqBy } = require("lodash");
 
 module.exports = {
@@ -76,7 +76,7 @@ module.exports = {
         return [];
       }
 
-      const formatVersionsList = (rawVersions) => {
+      const formatVersionsList = async (rawVersions) => {
         if (!rawVersions || rawVersions.length === 0) return [];
 
         const historic = rawVersions.filter((v) => !v.isVisibleInListView);
@@ -96,15 +96,51 @@ module.exports = {
         const MAX_HISTORIC_DISPLAY = 9;
         const boundedHistoric = sortedHistoric.slice(-MAX_HISTORIC_DISPLAY);
 
+        const parseVersionData = (val) => {
+          if (!val) return null;
+          if (typeof val === "object") return val;
+          if (typeof val === "string") {
+            try {
+              return JSON.parse(val);
+            } catch (e) {
+              return null;
+            }
+          }
+          return null;
+        };
+
         const result = boundedHistoric.map((h, idx) => ({
           ...h,
+          versionData: parseVersionData(h.versionData) || h,
           versionNumber: idx + 1,
           isCurrent: false,
         }));
 
         if (currentActive) {
+          let activeDoc = null;
+          if (currentActive.documentId) {
+            try {
+              const deepPop = buildDeepPopulate(strapi, slug);
+              activeDoc = await strapi.documents(slug).findOne({
+                documentId: currentActive.documentId,
+                status: "draft",
+                populate: deepPop,
+              });
+            } catch (e) {
+              try {
+                const deepPop = buildDeepPopulate(strapi, slug);
+                activeDoc = await strapi.documents(slug).findOne({
+                  documentId: currentActive.documentId,
+                  status: "published",
+                  populate: deepPop,
+                });
+              } catch (e2) {}
+            }
+          }
+
           result.push({
             ...currentActive,
+            versionData: activeDoc || parseVersionData(currentActive.versionData) || currentActive,
             createdAt: currentActive.updatedAt || currentActive.publishedAt || currentActive.createdAt,
             versionNumber: result.length + 1,
             isCurrent: true,
@@ -122,7 +158,7 @@ module.exports = {
       });
 
       if (versions && versions.length > 0) {
-        return formatVersionsList(versions);
+        return await formatVersionsList(versions);
       }
 
       // 2. If no versions found by vuid, resolve entry by documentId or id
@@ -150,7 +186,7 @@ module.exports = {
         });
 
         if (versions && versions.length > 0) {
-          return formatVersionsList(versions);
+          return await formatVersionsList(versions);
         }
 
         return [foundEntry];
@@ -241,33 +277,10 @@ module.exports = {
       }
 
       if (!sourceData) {
-        const buildDeepPopulate = (modelUid, depth = 0) => {
-          if (depth > 5) return true;
-          const m = strapi.getModel(modelUid);
-          if (!m) return true;
-          const pop = {};
-          for (const [k, a] of Object.entries(m.attributes || {})) {
-            if (a.type === "component") {
-              const nested = buildDeepPopulate(a.component, depth + 1);
-              pop[k] = { populate: Object.keys(nested || {}).length > 0 ? nested : "*" };
-            } else if (a.type === "dynamiczone") {
-              const on = {};
-              for (const compUid of a.components || []) {
-                const nested = buildDeepPopulate(compUid, depth + 1);
-                on[compUid] = { populate: Object.keys(nested || {}).length > 0 ? nested : "*" };
-              }
-              pop[k] = { on };
-            } else if (a.type === "media" || a.type === "relation") {
-              pop[k] = true;
-            }
-          }
-          return pop;
-        };
-
         try {
           sourceData = await strapi.documents(slug).findOne({
             documentId: historicVersion.documentId,
-            populate: buildDeepPopulate(slug),
+            populate: buildDeepPopulate(strapi, slug),
           });
         } catch (e) {
           sourceData = historicVersion;

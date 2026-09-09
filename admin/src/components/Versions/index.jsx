@@ -7,7 +7,7 @@ import {
   Badge,
   Dialog,
 } from "@strapi/design-system";
-import { Clock } from "@strapi/icons";
+import { Clock, Eye } from "@strapi/icons";
 import _ from "lodash";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
@@ -16,6 +16,7 @@ import {
   useAuth,
 } from "@strapi/strapi/admin";
 import { format, parseISO } from "date-fns";
+import RevisionPreviewModal from "./RevisionPreviewModal";
 
 const Versions = ({ isSidePanel = false }) => {
   const navigate = useNavigate();
@@ -42,6 +43,7 @@ const Versions = ({ isSidePanel = false }) => {
   const [loading, setLoading] = useState(false);
   const [revertingId, setRevertingId] = useState(null);
   const [revertError, setRevertError] = useState(null);
+  const [previewRevision, setPreviewRevision] = useState(null);
 
   const initialData = context?.initialData || context?.form?.initialData || {};
   const modifiedData = context?.modifiedData || context?.form?.modifiedData || {};
@@ -86,13 +88,22 @@ const Versions = ({ isSidePanel = false }) => {
             : v.updatedBy
             ? `${v.updatedBy.firstname || ""} ${v.updatedBy.lastname || ""}`.trim() || v.updatedBy.email
             : loggedInAuthor;
+          const hasKeys = (obj) => obj && typeof obj === "object" && Object.keys(obj).length > 0;
+          const currentData = {
+            ...(hasKeys(v.versionData) ? v.versionData : (v || {})),
+            ...(hasKeys(initialData) ? initialData : {}),
+            ...(hasKeys(modifiedData) ? modifiedData : {}),
+          };
+
           return {
+            ...v,
             id: v.id,
             documentId: v.documentId,
             versionNumber: Number(v.versionNumber || 1),
             createdAt: v.createdAt,
             author: authorName || loggedInAuthor,
             isCurrent: Boolean(v.isCurrent),
+            versionData: v.isCurrent ? currentData : (v.versionData || v),
           };
         });
         const sorted = formatted.sort((a, b) => a.versionNumber - b.versionNumber);
@@ -267,10 +278,10 @@ const Versions = ({ isSidePanel = false }) => {
                       <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse", textAlign: "left" }}>
                         <thead>
                           <tr style={{ borderBottom: "1px solid #eaeaef" }}>
-                            <th style={{ width: "10%", padding: "10px 12px", fontSize: "12px", color: "#666687" }}>#</th>
-                            <th style={{ width: "40%", padding: "10px 12px", fontSize: "12px", color: "#666687" }}>Date</th>
-                            <th style={{ width: "30%", padding: "10px 12px", fontSize: "12px", color: "#666687" }}>Author</th>
-                            <th style={{ width: "20%", padding: "10px 12px", fontSize: "12px", color: "#666687", textAlign: "right" }}>Manage</th>
+                            <th style={{ width: "8%", padding: "10px 12px", fontSize: "12px", color: "#666687" }}>#</th>
+                            <th style={{ width: "36%", padding: "10px 12px", fontSize: "12px", color: "#666687" }}>Date</th>
+                            <th style={{ width: "26%", padding: "10px 12px", fontSize: "12px", color: "#666687" }}>Author</th>
+                            <th style={{ width: "30%", padding: "10px 12px", fontSize: "12px", color: "#666687", textAlign: "right" }}>Manage</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -301,38 +312,52 @@ const Versions = ({ isSidePanel = false }) => {
                                   {rev.author}
                                 </td>
                                 <td style={{ padding: "8px 12px", textAlign: "right" }}>
-                                  {isCurrent ? (
-                                    <Badge
-                                      style={{
-                                        backgroundColor: "#eafbe7",
-                                        color: "#277c22",
-                                        borderRadius: "12px",
-                                        padding: "4px 12px",
-                                        border: "1px solid #c0ebd0",
-                                        fontWeight: "600",
-                                      }}
-                                    >
-                                      CURRENT
-                                    </Badge>
-                                  ) : (
+                                  <Flex gap={2} justifyContent="flex-end" alignItems="center">
                                     <Button
-                                      variant="secondary"
+                                      variant="tertiary"
                                       size="S"
-                                      loading={revertingId === (rev.documentId || rev.id)}
-                                      disabled={Boolean(revertingId)}
-                                      onClick={() => handleRevertToRevision(rev)}
+                                      startIcon={<Eye />}
+                                      onClick={() => setPreviewRevision(rev)}
                                       style={{
-                                        backgroundColor: "#ffffff",
-                                        border: "1px solid #4945ff",
-                                        color: "#4945ff",
-                                        padding: "2px 12px",
+                                        padding: "2px 8px",
                                         fontSize: "12px",
-                                        fontWeight: "600",
                                       }}
                                     >
-                                      {revertingId === (rev.documentId || rev.id) ? "Reverting..." : "Revert"}
+                                      Preview
                                     </Button>
-                                  )}
+                                    {isCurrent ? (
+                                      <Badge
+                                        style={{
+                                          backgroundColor: "#eafbe7",
+                                          color: "#277c22",
+                                          borderRadius: "12px",
+                                          padding: "4px 12px",
+                                          border: "1px solid #c0ebd0",
+                                          fontWeight: "600",
+                                        }}
+                                      >
+                                        CURRENT
+                                      </Badge>
+                                    ) : (
+                                      <Button
+                                        variant="secondary"
+                                        size="S"
+                                        loading={revertingId === (rev.documentId || rev.id)}
+                                        disabled={Boolean(revertingId)}
+                                        onClick={() => handleRevertToRevision(rev)}
+                                        style={{
+                                          backgroundColor: "#ffffff",
+                                          border: "1px solid #4945ff",
+                                          color: "#4945ff",
+                                          padding: "2px 12px",
+                                          fontSize: "12px",
+                                          fontWeight: "600",
+                                        }}
+                                      >
+                                        {revertingId === (rev.documentId || rev.id) ? "Reverting..." : "Revert"}
+                                      </Button>
+                                    )}
+                                  </Flex>
                                 </td>
                               </tr>
                             );
@@ -351,6 +376,14 @@ const Versions = ({ isSidePanel = false }) => {
             </Dialog.Footer>
           </Dialog.Content>
         </Dialog.Root>
+      )}
+
+      {previewRevision && (
+        <RevisionPreviewModal
+          isOpen={Boolean(previewRevision)}
+          onClose={() => setPreviewRevision(null)}
+          revision={previewRevision}
+        />
       )}
     </div>
   );

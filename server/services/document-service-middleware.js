@@ -1,7 +1,7 @@
 "use strict";
 
 const { v4: uuid } = require("uuid");
-const { getService } = require("../utils");
+const { getService, buildDeepPopulate } = require("../utils");
 const _ = require("lodash");
 
 module.exports = ({ strapi }) => {
@@ -170,31 +170,9 @@ module.exports = ({ strapi }) => {
 
           // Create historic snapshot row for previous version
           try {
-            // Fetch deep document payload (including media, components, dynamic zones, relations)
-            const buildDeepPopulate = (modelUid, depth = 0) => {
-              if (depth > 5) return true;
-              const m = strapi.getModel(modelUid);
-              if (!m) return true;
-              const pop = {};
-              for (const [k, a] of Object.entries(m.attributes || {})) {
-                if (a.type === "component") {
-                  pop[k] = { populate: buildDeepPopulate(a.component, depth + 1) };
-                } else if (a.type === "dynamiczone") {
-                  const on = {};
-                  for (const compUid of a.components || []) {
-                    on[compUid] = { populate: buildDeepPopulate(compUid, depth + 1) };
-                  }
-                  pop[k] = { on };
-                } else if (a.type === "media" || a.type === "relation") {
-                  pop[k] = true;
-                }
-              }
-              return pop;
-            };
-
             let fullDocument = null;
             try {
-              const deepPop = buildDeepPopulate(context.uid);
+              const deepPop = buildDeepPopulate(strapi, context.uid);
               fullDocument = await strapi.documents(context.uid).findOne({
                 documentId: currentRecord.documentId,
                 status: "published",
@@ -203,7 +181,7 @@ module.exports = ({ strapi }) => {
               });
             } catch (docErr) {
               try {
-                const deepPop = buildDeepPopulate(context.uid);
+                const deepPop = buildDeepPopulate(strapi, context.uid);
                 fullDocument = await strapi.documents(context.uid).findOne({
                   documentId: currentRecord.documentId,
                   status: "draft",
