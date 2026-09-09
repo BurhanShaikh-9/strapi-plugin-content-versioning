@@ -6,17 +6,24 @@ const _ = require("lodash");
 
 module.exports = ({ strapi }) => {
   return async (context, next) => {
+    let nextCalled = false;
+    const safeNext = async () => {
+      if (nextCalled) return;
+      nextCalled = true;
+      return await next();
+    };
+
     try {
       const { isVersionedContentType } = getService("content-types");
       const model = strapi.getModel(context.uid);
 
       if (!model || !isVersionedContentType(model)) {
-        return await next();
+        return await safeNext();
       }
 
       // Read operations pass through directly
       if (context.action === "findMany" || context.action === "findPage" || context.action === "findOne") {
-        return await next();
+        return await safeNext();
       }
 
       // Intercept clone operation to give the duplicated document its own fresh vuid & version 1
@@ -29,7 +36,7 @@ module.exports = ({ strapi }) => {
         context.params.data.versionNumber = 1;
         context.params.data.isVisibleInListView = true;
 
-        const result = await next();
+        const result = await safeNext();
 
         // Ensure newly cloned document rows in DB get the fresh vuid & version 1
         const clonedDocId =
@@ -38,23 +45,25 @@ module.exports = ({ strapi }) => {
           result?.id;
 
         if (clonedDocId) {
-          try {
-            await strapi.db.query(context.uid).updateMany({
-              where: {
-                $or: [
-                  { documentId: clonedDocId },
-                  { id: Number(clonedDocId) || 0 },
-                ],
-              },
-              data: {
-                vuid: freshVuid,
-                versionNumber: 1,
-                isVisibleInListView: true,
-              },
-            });
-          } catch (cloneErr) {
-            strapi.log.warn(`[content-versioning clone sync error]: ${cloneErr.message}`);
-          }
+          setImmediate(async () => {
+            try {
+              await strapi.db.query(context.uid).updateMany({
+                where: {
+                  $or: [
+                    { documentId: clonedDocId },
+                    { id: Number(clonedDocId) || 0 },
+                  ],
+                },
+                data: {
+                  vuid: freshVuid,
+                  versionNumber: 1,
+                  isVisibleInListView: true,
+                },
+              });
+            } catch (cloneErr) {
+              strapi.log.warn(`[content-versioning clone sync error]: ${cloneErr.message}`);
+            }
+          });
         }
         return result;
       }
@@ -71,7 +80,7 @@ module.exports = ({ strapi }) => {
             data.isVisibleInListView = true;
           }
         }
-        return await next();
+        return await safeNext();
       }
 
       // For update operations: ensure vuid is assigned without creating new version snapshots
@@ -96,7 +105,7 @@ module.exports = ({ strapi }) => {
             }
           }
         }
-        return await next();
+        return await safeNext();
       }
 
       // Intercept publish operation to snapshot previous version & increment version number
@@ -266,20 +275,19 @@ module.exports = ({ strapi }) => {
           }
         }
 
-          if (context.params?.data) {
-            context.params.data.versionNumber = nextVer;
-            context.params.data.isVisibleInListView = true;
+          if (!context.params.data) {
+            context.params.data = {};
           }
+          context.params.data.versionNumber = nextVer;
+          context.params.data.vuid = recordVuid;
+          context.params.data.isVisibleInListView = true;
 
-          // Execute publish first so Strapi completes its publish lifecycle
-          const result = await next();
-
-          // After publish completes, synchronize nextVer to ALL active rows (both draft and published)
+          // Before publish, synchronize nextVer and vuid to the draft row within active lifecycle
           try {
             await strapi.db.query(context.uid).updateMany({
               where: {
                 vuid: recordVuid,
-                isVisibleInListView: true,
+                publishedAt: null,
               },
               data: {
                 versionNumber: nextVer,
@@ -287,31 +295,22 @@ module.exports = ({ strapi }) => {
                 isVisibleInListView: true,
               },
             });
-
-            if (docId) {
-              await strapi.db.query(context.uid).updateMany({
-                where: {
-                  documentId: docId,
-                },
-                data: {
-                  versionNumber: nextVer,
-                  vuid: recordVuid,
-                  isVisibleInListView: true,
-                },
-              });
-            }
           } catch (syncErr) {
-            strapi.log.warn(`[content-versioning post-publish sync error]: ${syncErr.message}`);
+            strapi.log.warn(`[content-versioning draft sync notice]: ${syncErr.message}`);
           }
 
+          const result = await safeNext();
           return result;
         }
       }
 
-      return await next();
+      return await safeNext();
     } catch (err) {
       strapi.log.error(`[content-versioning middleware error]: ${err.message}`, err);
-      return await next();
+      if (!nextCalled) {
+        return await safeNext();
+      }
+      throw err;
     }
   };
 };
