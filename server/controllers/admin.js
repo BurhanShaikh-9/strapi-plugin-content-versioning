@@ -326,7 +326,19 @@ module.exports = {
 
         const attr = model.attributes[key];
         let val = sourceData[key];
-        if (val === undefined || val === null) continue;
+
+        if (val === undefined || val === null) {
+          if (
+            attr.type === "dynamiczone" ||
+            (attr.type === "component" && attr.repeatable) ||
+            (attr.type === "relation" && attr.relation?.endsWith("ToMany"))
+          ) {
+            restoreData[key] = [];
+          } else {
+            restoreData[key] = null;
+          }
+          continue;
+        }
 
         if (attr.type === "component" || attr.type === "dynamiczone") {
           restoreData[key] = cleanComponentData(val);

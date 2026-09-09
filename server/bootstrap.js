@@ -10,9 +10,9 @@ module.exports = async ({ strapi }) => {
   await ensureVersionedDBSchema(strapi);
 
   strapi.server.router.use(
-    "/content-manager/collection-types/:model",
+    "/content-manager",
     (ctx, next) => {
-      if (ctx.method === "POST") {
+      if (ctx.method === "POST" && ctx.request.body) {
         delete ctx.request.body.vuid;
         delete ctx.request.body.versionNumber;
         delete ctx.request.body.versions;

@@ -19,11 +19,53 @@ module.exports = ({ strapi }) => {
         return await next();
       }
 
+      // Intercept clone operation to give the duplicated document its own fresh vuid & version 1
+      if (context.action === "clone") {
+        const freshVuid = uuid();
+        if (!context.params.data) {
+          context.params.data = {};
+        }
+        context.params.data.vuid = freshVuid;
+        context.params.data.versionNumber = 1;
+        context.params.data.isVisibleInListView = true;
+
+        const result = await next();
+
+        // Ensure newly cloned document rows in DB get the fresh vuid & version 1
+        const clonedDocId =
+          result?.documentId ||
+          (result?.entries && result.entries[0]?.documentId) ||
+          result?.id;
+
+        if (clonedDocId) {
+          try {
+            await strapi.db.query(context.uid).updateMany({
+              where: {
+                $or: [
+                  { documentId: clonedDocId },
+                  { id: Number(clonedDocId) || 0 },
+                ],
+              },
+              data: {
+                vuid: freshVuid,
+                versionNumber: 1,
+                isVisibleInListView: true,
+              },
+            });
+          } catch (cloneErr) {
+            strapi.log.warn(`[content-versioning clone sync error]: ${cloneErr.message}`);
+          }
+        }
+        return result;
+      }
+
       // Intercept create operation
       if (context.action === "create") {
         const { data } = context.params;
         if (data) {
-          if (!data.vuid) {
+          // If creating a new document (not an extra locale for an existing document), assign fresh vuid
+          const isNewDoc = !context.params.documentId;
+          if (isNewDoc || !data.vuid) {
             data.vuid = uuid();
             data.versionNumber = 1;
             data.isVisibleInListView = true;
@@ -81,17 +123,41 @@ module.exports = ({ strapi }) => {
             context.params.data.vuid = recordVuid;
           }
 
-          // Fetch existing historic snapshots for this vuid to determine monotonic snapshot version
-          const historicSnapshots = await strapi.db.query(context.uid).findMany({
-            where: { vuid: recordVuid, isVisibleInListView: false },
-          });
+          // Check if this document already has an active published record in the database
+          let existingPublished = null;
+          if (currentRecord.documentId) {
+            existingPublished = await strapi.db.query(context.uid).findOne({
+              where: {
+                documentId: currentRecord.documentId,
+                publishedAt: { $notNull: true },
+                isVisibleInListView: true,
+              },
+            });
+          } else if (recordVuid) {
+            existingPublished = await strapi.db.query(context.uid).findOne({
+              where: {
+                vuid: recordVuid,
+                publishedAt: { $notNull: true },
+                isVisibleInListView: true,
+              },
+            });
+          }
 
-          const highestSnapshotNum =
-            _.max((historicSnapshots || []).map((s) => Number(s.versionNumber || 0))) || 0;
-          const currentActiveNum = Number(currentRecord.versionNumber || 1);
+          const isInitialPublish = !existingPublished;
+          let nextVer = 1;
 
-          const newSnapshotVer = Math.max(highestSnapshotNum + 1, currentActiveNum);
-          let nextVer = Math.min(newSnapshotVer + 1, 10);
+          if (!isInitialPublish) {
+            // Fetch existing historic snapshots for this vuid to determine snapshot version
+            const historicSnapshots = await strapi.db.query(context.uid).findMany({
+              where: { vuid: recordVuid, isVisibleInListView: false },
+            });
+
+            const highestSnapshotNum =
+              _.max((historicSnapshots || []).map((s) => Number(s.versionNumber || 0))) || 0;
+            const currentActiveNum = Number(currentRecord.versionNumber || 1);
+
+            const newSnapshotVer = Math.max(highestSnapshotNum + 1, currentActiveNum);
+            nextVer = Math.min(newSnapshotVer + 1, 10);
 
           // Create historic snapshot row for previous version
           try {
@@ -198,6 +264,7 @@ module.exports = ({ strapi }) => {
           } catch (snapErr) {
             strapi.log.warn(`[versioning snapshot notice]: ${snapErr.message}`);
           }
+        }
 
           if (context.params?.data) {
             context.params.data.versionNumber = nextVer;
