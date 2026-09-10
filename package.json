@@ -1,6 +1,6 @@
 {
   "name": "@burhanshaikh/strapi-plugin-content-versioning",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Content Versioning & Revision Control plugin for Strapi 5 with deep document preview and instant revert",
   "keywords": [
     "strapi",
@@ -48,12 +48,12 @@
     "yup": "^0.32.9"
   },
   "peerDependencies": {
-    "@strapi/design-system": "^2.0.0",
-    "@strapi/icons": "^2.0.0",
+    "@strapi/design-system": ">=2.0.0-rc.0 || ^2.0.0",
+    "@strapi/icons": ">=2.0.0-rc.0 || ^2.0.0",
     "@strapi/strapi": "^5.0.0",
     "@strapi/utils": "^5.0.0",
-    "react": "^18.0.0",
-    "react-dom": "^18.0.0",
+    "react": "^17.0.0 || ^18.0.0",
+    "react-dom": "^17.0.0 || ^18.0.0",
     "react-router-dom": "^6.0.0",
     "styled-components": "^6.0.0"
   },
