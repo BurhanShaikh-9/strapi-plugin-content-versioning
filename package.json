@@ -45,7 +45,7 @@
     "prop-types": "^15.8.1",
     "react-intl": "^6.6.2",
     "uuid": "^9.0.1",
-    "yup": "^0.32.9"
+    "yup": "^1.7.1"
   },
   "peerDependencies": {
     "@strapi/design-system": ">=2.0.0-rc.0 || ^2.0.0",
