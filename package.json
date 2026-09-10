@@ -1,6 +1,6 @@
 {
   "name": "@burhanshaikh/strapi-plugin-content-versioning",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Content Versioning & Revision Control plugin for Strapi 5 with deep document preview and instant revert",
   "keywords": [
     "strapi",
