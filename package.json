@@ -44,7 +44,7 @@
     "lodash": "^4.17.21",
     "prop-types": "^15.8.1",
     "react-intl": "^6.6.2",
-    "uuid": "^9.0.1",
+    "uuid": "^14.0.2",
     "yup": "^0.32.9"
   },
   "peerDependencies": {
