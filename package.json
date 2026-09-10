@@ -1,6 +1,6 @@
 {
   "name": "@burhanshaikh/strapi-plugin-content-versioning",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "description": "Content Versioning & Revision Control plugin for Strapi 5 with deep document preview and instant revert",
   "keywords": [
     "strapi",
@@ -56,6 +56,32 @@
     "react-dom": "^17.0.0 || ^18.0.0",
     "react-router-dom": "^6.0.0",
     "styled-components": "^6.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@strapi/design-system": {
+      "optional": true
+    },
+    "@strapi/icons": {
+      "optional": true
+    },
+    "@strapi/strapi": {
+      "optional": true
+    },
+    "@strapi/utils": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    },
+    "react-router-dom": {
+      "optional": true
+    },
+    "styled-components": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@strapi/design-system": "^2.0.0",
