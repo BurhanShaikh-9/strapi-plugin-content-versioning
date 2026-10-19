@@ -2830,10 +2830,10 @@
     yup "0.32.9"
     zod "3.25.67"
 
-"@strapi/utils@^5.0.0":
-  version "5.53.0"
-  resolved "https://registry.yarnpkg.com/@strapi/utils/-/utils-5.53.0.tgz#1c15c7424d74285a653996e818e31f65507a1fe6"
-  integrity sha512-22bA2H4rqFNYYlA+PkHZ7unxK4zpYjj1e3VBxWltpAc2HmoOeF5GMaCQfGsLG9YoxPT4RSzZNGpmLko16TylRg==
+"@strapi/utils@^5.58.0":
+  version "5.58.0"
+  resolved "https://registry.yarnpkg.com/@strapi/utils/-/utils-5.58.0.tgz#6befb03b7ef34246501f0986ae9929dc491d6a2a"
+  integrity sha512-vQd9OcodKT5goZ8FSikO7VtDC4A2x2cfvwP+i3MLad+PGapFpYvaI5JblqWi/F0VsylTmMlEV2oLLM8q1M831g==
   dependencies:
     "@sindresorhus/slugify" "1.1.0"
     date-fns "2.30.0"
